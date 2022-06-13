@@ -7,40 +7,410 @@ output:
     toc: true
     toc_float: true
 ---
+```{css, echo = FALSE}
+#TOC {
+  position: fixed;
+  left: 30px;
+  width: 400px;
+  max-width:120%;
+  overflow:auto;
+}
+
+h1.title{
+  color: navy;
+}
+
+h1 {
+  color: blue;
+}
+
+h2 {
+  color: green;
+}
+
+h3 {
+  color: orange;
+}
+```
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
-# Sample
+knitr::opts_chunk$set(
+  echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+options(knitr.table.format = "latex")
 
-## R Markdown
+# 0. library
+library(ggplot2)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(data.table)
+library(knitr)
+library(patchwork)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
-```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# 1. 개요
+
+## 1.1. 이슈
+
+최근, 전국장애인차별철폐연대의 지하철 운행 방해 시위로 인해 장애인 이동권 보장에 이슈를 받음
+
+![picture1](http://www.newsworker.co.kr/news/photo/202202/148054_162953_260.jpg)
+
+서울연구원 자료에 의하면, 서울시 교통약자는 약 26%에 달하며 고령 인구의 증가와 함께 교통 약자의 비율도 증가하는 추세임
+![picture2](https://img.hani.co.kr/imgdb/resize/2020/1211/160758448841_20201211.JPG)
 
 
+## 1.2. 연구 목적
+
+카드데이터와 열차운행실적 데이터를 활용하여 승객 유형별 승강장 내 이동 시간을 파악
+역별 이동 형평성에 대한 평가지표가 될 수 있음
+![purpose](./pictures/purpose of study.png)
+
+## 1.3. 분석 대상 호선(우이신설선) 개요
+
+![LineWS](https://pds.joongang.co.kr/news/component/htmlphoto_mmdata/202009/23/a3535a24-7ce3-4f12-a9ba-fc02be67ffde.jpg)
+
+* 13개역, 2량 1편성의 경전철
+* 주택가의 승객들을 다른 지하철로 연결해주는 기능
+* 민자철도 환승 게이트 데이터를 이용하여 환승 이용객의 경로 추정 가능
+* OD별 단일 경로로 이동하였을 가능성이 높아 이용 열차 추정이 용이
+* 경로 승객 비중이 큼
 
 
-# Introduction
+# 2. 데이터 개요 및 전처리
 
-# Data
+### 2.1. 열차운행실적데이터 수집율 파악
+* “서울시 지하철 위치정보 Open API 수집시스템”으로 수집한 데이터를 활용
+* 보유한 2020.07.01 ~ 2020.10.31 데이터 중 날짜에 따라 수집율이 크게 차이남
+  * Available Train : 모든 역에 대한 도착 혹은 출발 정보가 들어있는 열차
+  * 10월 한달을 분석 대상 기간으로 선정
 
-# Result.
+```{r subwayRtData}
+# 1. 파일 불러오기
+arrSummaryDf <- read.csv('C:/Users/sanghyeok/Documents/R projects/2022-1_TermProject/subwayRtDataSummary/arrSummaryDf.csv')
+depSummaryDf <- read.csv('C:/Users/sanghyeok/Documents/R projects/2022-1_TermProject/subwayRtDataSummary/depSummaryDf.csv')
+
+rtSummaryDf <- rbind(pivot_longer(arrSummaryDf[,c(1,2,3)], arrAvailTrain,  names_to = "arr_dep", values_to = "availTrain")
+                          ,pivot_longer(depSummaryDf[,c(1,2,3)], depAvailTrain,  names_to = "arr_dep", values_to = "availTrain"))
+
+ggplot(data=rtSummaryDf, aes(x=date,
+                          y=availTrain,
+                          group=arr_dep,
+                          color=arr_dep))+
+   geom_line()+
+   geom_point(data=rtSummaryDf, aes(x=date,
+                                y=availTrain,
+                                group = arr_dep,
+                                color = arr_dep)) +
+   geom_vline(xintercept = c("2020-08-01","2020-09-01","2020-10-01"), color = "red", linetype = 2) + 
+   ggtitle("우이신설선 날짜별 Available Train 수(2020.07.01~2020.10.31)") +
+   labs(x="Date", y="Available Train 수") +
+   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5 ),
+          legend.position='top')
+```
+
+## 2.2. 카드 데이터 전처리
+
+### 2.2.1. 교통카드 데이터(TCD)
+
+```{r cardData}
+
+yymmdd <- 201001
+
+metro_tcd <- fread(file = paste0("T:/05_Smart_Card_Data/202007~202010_수도권교통카드데이터_KRRI/01_rawData/METRO_TCD_20",yymmdd,".dat"))
+
+print('metro_tcd')
+head(metro_tcd)
+```
+|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|
+|-|-|-|-|-|-|-|-|-|--|--|--|--|--|--|
+|일련번호|가상카드번호|정산지역코드|카드구분코드|노선 ID|승차일시|발권시간|승차정류장 ID|하차일시|하차정류장 ID|트랜잭션 ID|환승횟수|사용자구분코드|이용거리|탑승시간
+
+
+### 2.2.2. 수도권 민자철도 환승게이트 정보 (TGI)
+```{r}
+metro_tgi <- fread(file = paste0("T:/05_Smart_Card_Data/202007~202010_수도권교통카드데이터_KRRI/01_rawData/METRO_TGI_20",yymmdd,".dat"))
+print('metro_tgi')
+head(metro_tgi)
+```
+|1|2|3|4|5|6|7|
+|-|-|-|-|-|-|-|
+|년월일|카드 구분 코드|가상 카드번호|사용 일시|외부 역 번호|이전 승하차 일시|이전 역 번호|
+
+### 2.2.3.  TCD와 TGI의 병합하여 우이신설 내 OD 구축
+* Line WS -> Line WS 
+* Line WS -> Other Line  
+* Other Line -> Line WS
+
+## 2.3. 분석 대상 기초통계
+2020년 10월 1일~2020년 10월 31일 우이신설 내 통행에 대한 기초 통계
+```{r}
+## 2.0. 분석대상 데이터 불러오기(양방향)
+  
+  svPath <- "C:/Users/sanghyeok/Desktop/데이터 분석/05_ 카드데이터 전처리/LineWS-202010/"
+  
+  cardData <- data.frame()
+  yymmdd <- 201001
+  for (yymmdd in(201001:201031)){
+    cardDataOnDate <- read.csv(paste0(svPath, 'LineWS-bndA-card_data-on-20',yymmdd,'.csv'))
+    # cardDataOnDate <- cardDataOnDate[cardDataOnDate$tgin_stn < cardDataOnDate$tgout_stn,] #bnd0만 보기
+    # print(nrow(cardDataOnDate))
+    cardData <- rbind(cardData, cardDataOnDate)
+  }
+  nrow(cardData)
+  print(paste0('양방향 통행 수 : ',nrow(cardData) ))
+```
+```{r}
+  ## 2.1. 날짜별 전체 통행량
+  
+  cardData$wday <- factor(weekdays(date(cardData$tgin_time)) %in% c('토요일','일요일'),labels=c('평일','주말'))
+  
+  ggplot(data=cardData) + 
+    geom_bar(mapping = aes(x=date(tgin_time),fill=wday))  +
+    ggtitle("우이신설선 날짜별 전체 통행량") +
+    labs(x="Date", y="통행량") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5 ),
+          legend.position='top') +
+    scale_x_continuous(breaks = seq(from = min(date(cardData$tgin_time)), to =  max(date(cardData$tgin_time)), by = 1))
+```
+
+```{r}
+  ## 2.2. 역별 승하차량 bnd0 방향
+  
+  cardDataBnd0 <- cardData[cardData$tgin_stn < cardData$tgout_stn,]
+  
+  cntBnd0Bytgin_stn <- cardDataBnd0 %>% group_by(tgin_stn) %>% summarise(count = n())
+  
+  cntBnd0Bytgout_stn <- cardDataBnd0 %>% group_by(tgout_stn) %>% summarise(count = n())
+  
+  cntBnd0Bytginout_stn <- rbind(pivot_longer(cntBnd0Bytgin_stn, tgin_stn,  names_to = "승하차량", values_to = "stn")
+                            ,pivot_longer(cntBnd0Bytgout_stn, tgout_stn,  names_to = "승하차량", values_to = "stn")
+                            ,data.frame(count=0, 승하차량=c('tgin_stn', 'tgout_stn'), stn=c(4713, 4701))
+  )
+  
+  ggplot(cntBnd0Bytginout_stn, aes(x=stn, y=count, fill=승하차량)) +
+    geom_bar(stat='identity', position='dodge') +
+    ggtitle("Bnd0 방향 (4701->4713) 각 역에서의 승하차량") +
+    labs(x="역", y="통행량") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5 ),
+          legend.position='top')+
+    scale_x_continuous(breaks = seq(from = 4701, to = 4713, by = 1))
+```
+
+```{r}
+ ## 2.3. 역별 승하차량 bnd1 방향
+  
+  cardDataBnd1 <- cardData[cardData$tgin_stn > cardData$tgout_stn,]
+  
+  cntBnd1Bytgin_stn <- cardDataBnd1 %>% group_by(tgin_stn) %>% summarise(count = n())
+  
+  cntBnd1Bytgout_stn <- cardDataBnd1 %>% group_by(tgout_stn) %>% summarise(count = n())
+  
+  cntBnd1Bytginout_stn <- rbind(pivot_longer(cntBnd1Bytgin_stn, tgin_stn,  names_to = "승하차량", values_to = "stn")
+                                ,pivot_longer(cntBnd1Bytgout_stn, tgout_stn,  names_to = "승하차량", values_to = "stn")
+                                ,data.frame(count=0, 승하차량=c('tgin_stn', 'tgout_stn'), stn=c(4701, 4713))
+  )
+  
+  ggplot(cntBnd1Bytginout_stn, aes(x=stn, y=count, fill=승하차량)) +
+    geom_bar(stat='identity', position='dodge') +
+    ggtitle("Bnd1 방향 (4713->4701) 각 역에서의 승하차량") +
+    labs(x="역", y="통행량") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5 ),
+          legend.position='top')+
+    scale_x_continuous(breaks = seq(from = 4701, to = 4713, by = 1))
+```
+
+```{r}
+  ## 2.4. 승객 유형별 분류하기
+  
+  cardData$usertypeDef <- "기타"
+  cardData[cardData$usertype %in% c(401,511,541,543), "usertypeDef"] <- "일반"
+  cardData[cardData$usertype %in% c(406,417,521), "usertypeDef"] <- "경로"
+  cardData[cardData$usertype %in% c(407,523), "usertypeDef"] <- "장애"
+  cardData[cardData$usertype %in% c(404), "usertypeDef"] <- "청소년"
+  cardData[cardData$usertype %in% c(402,512,544,546), "usertypeDef"] <- "어린이"
+  
+  cardData[cardData$tgin_stn < cardData$tgout_stn,] %>%
+  ggplot(aes("", fill=usertypeDef)) + 
+  geom_bar(position = "fill") +
+  coord_polar(theta = "y")  +
+  geom_text(data = . %>% 
+            group_by(usertypeDef) %>%
+            tally() %>%
+            mutate(p = round(n / sum(n),2)) %>%
+            ungroup(),
+          aes(y = p, label = scales::percent(p)),
+          position = position_stack(vjust = 0.5),
+          show.legend = FALSE) +
+  ggtitle("우이신설선 bnd0 승객유형별 통행 비율") 
+```
+![purpose](./pictures/type classification.png)
+```{r}
+  ggplot(cardData, aes(x=date(tgin_time), fill=usertypeDef)) +
+    geom_bar(position="fill") +
+    ggtitle("우이신설선 날짜별 승객유형별 통행 비율") +
+    labs(x="Date", y="승객유형별 통행 비율") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5 ),
+          legend.position='top') +
+    scale_x_continuous(breaks = seq(from = min(date(cardData$tgin_time)), to =  max(date(cardData$tgin_time)), by = 1))
+```
+
+```{r}
+  # bnd0
+  ggplot(cardData[cardData$tgin_stn < cardData$tgout_stn,], aes(x=tgout_stn, fill=usertypeDef)) +
+    geom_bar() +
+    #geom_bar(position="fill") +
+    ggtitle("우이신설선 bnd0 하차역별 승객유형별 통행 비율") +
+    labs(x="Date", y="승객유형별 통행 비율") +
+    theme(axis.text.x = element_text(angle = 0, hjust = 1, vjust = 0.5 ),
+          legend.position='top') +
+    scale_x_continuous(breaks = seq(from = min(cardData$tgin_stn), to =  max(cardData$tgin_stn), by = 1))+ coord_flip()
+```
+
+
+# 3. 데이터 처리
+
+## 3.1. Reference Passenger 추출
+
+![Reference Passenger](./pictures/Reference Passenger.png)
+
+## 3.2. Reference Passenger 추출 결과
+```{r}
+cardData <- read.csv("./cardData/LineWS-bnd0-total_card_data-on-202010.csv")
+refData <- read.csv("./cardData/reference_passenger_data-on-2020-10.csv")
+```
+`r nrow(cardData)`개 에서 `r nrow(refData)`개로 감소 (`r nrow(refData)/nrow(cardData)*100`%)
+
+```{r}
+cardData <- read.csv("./cardData/LineWS-bnd0-total_card_data-on-202010.csv")
+refData <- read.csv("./cardData/reference_passenger_data-on-2020-10.csv")
+
+#개수변화, 승객유형 비율
+cardData %>% count(usertypeDef)
+refData %>% count(usertypeDef)
+
+a <- cardData %>%
+ggplot(aes("", fill=usertypeDef)) + 
+geom_bar(position = "fill") +
+coord_polar(theta = "y")  +
+geom_text(data = . %>% 
+          group_by(usertypeDef) %>%
+          tally() %>%
+          mutate(p = round(n / sum(n),2)) %>%
+          ungroup(),
+        aes(y = p, label = scales::percent(p)),
+        position = position_stack(vjust = 0.5),
+        show.legend = FALSE) +
+ggtitle("전체 카드 데이터 승객유형별 통행 비율") 
+
+b <- refData %>%
+  ggplot(aes("", fill=usertypeDef)) + 
+  geom_bar(position = "fill") +
+  coord_polar(theta = "y")  +
+  geom_text(data = . %>% 
+            group_by(usertypeDef) %>%
+            tally() %>%
+            mutate(p = round(n / sum(n),2)) %>%
+            ungroup(),
+          aes(y = p, label = scales::percent(p)),
+          position = position_stack(vjust = 0.5),
+          show.legend = FALSE) +
+  ggtitle("RefPsg 데이터 승객유형별 통행 비율")
+
+a+b
+
+```
+
+# 4. 결과
+
+## 4.1. 승객 유형별 egress time 평균
+일반 승객의 Egress Time 평균이 가장 낮게 나타나지만, 큰 차이를 보이지는 않음
+```{r}
+refData %>% group_by(usertypeDef) %>% 
+  summarise(egress_mean = mean(egressTime_sec), egress_ratio= egress_mean/mean(refData[refData$usertypeDef=="일반","egressTime_sec"])) 
+```
+
+## 4.2. 역별 승객 유형별 egress time 평균 비교
+```{r}
+# 하차역별 일반 승객 대비 경로 및 장애 승객의 egressTime 비율
+  egressTimeRatio <- data.frame()
+  
+  for (stn in c(4702:4713)){
+    
+    general_mean <- mean(refData[refData$tgout_stn==stn & refData$usertypeDef == "일반", "egressTime_sec"])
+    old_mean <- mean(refData[refData$tgout_stn==stn & refData$usertypeDef == "경로", "egressTime_sec"])
+    disabled_mean <- mean(refData[refData$tgout_stn==stn & refData$usertypeDef == "장애", "egressTime_sec"])
+    teenager_mean <- mean(refData[refData$tgout_stn==stn & refData$usertypeDef == "청소년", "egressTime_sec"])
+    child_mean <- mean(refData[refData$tgout_stn==stn & refData$usertypeDef == "어린이", "egressTime_sec"])
+    
+    old_ratio <- old_mean/general_mean
+    
+    disabled_ratio <- disabled_mean/general_mean
+    
+    teenager_ratio <- teenager_mean/general_mean
+    
+    child_ratio <- child_mean/general_mean
+    
+    
+    egressTimeRatio <- rbind(egressTimeRatio, c(stn, general_mean, old_ratio, disabled_ratio,teenager_ratio,child_ratio))
+  }
+  names(egressTimeRatio) <- c("tgout_stn","일반 평균","경로/일반","장애/일반","청소년/일반","어린이/일반")
+  
+  egressTimeRatio
+  
+```
+
+
+## 4.3. 승객유형별 상위 50% egress time의 평균 비교
+```{r}
+# 하차역별 일반 승객 대비 경로 및 장애 승객의 egressTime 비율
+  egressTimeRatio <- data.frame()
+  
+  for (stn in c(4702:4713)){
+    
+    general_mean <- mean(tail(sort(refData[refData$tgout_stn==stn & refData$usertypeDef == "일반", "egressTime_sec"]),
+                              n=length(refData[refData$tgout_stn==stn & refData$usertypeDef == "일반", "egressTime_sec"])/2))
+    old_mean <- mean(tail(sort(refData[refData$tgout_stn==stn & refData$usertypeDef == "경로", "egressTime_sec"]),
+                          n=length(refData[refData$tgout_stn==stn & refData$usertypeDef == "경로", "egressTime_sec"])/2))
+    disabled_mean <- mean(tail(sort(refData[refData$tgout_stn==stn & refData$usertypeDef == "장애", "egressTime_sec"]),
+                               n=length(refData[refData$tgout_stn==stn & refData$usertypeDef == "장애", "egressTime_sec"])/2))
+    teenager_mean <- mean(tail(sort(refData[refData$tgout_stn==stn & refData$usertypeDef == "청소년", "egressTime_sec"]),
+                               n=length(refData[refData$tgout_stn==stn & refData$usertypeDef == "청소년", "egressTime_sec"])/2))
+    child_mean <- mean(tail(sort(refData[refData$tgout_stn==stn & refData$usertypeDef == "어린이", "egressTime_sec"]),
+                            n=length(refData[refData$tgout_stn==stn & refData$usertypeDef == "어린이", "egressTime_sec"])/2))
+    
+    old_ratio <- old_mean/general_mean
+    
+    disabled_ratio <- disabled_mean/general_mean
+    
+    teenager_ratio <- teenager_mean/general_mean
+    
+    child_ratio <- child_mean/general_mean
+    
+    
+    egressTimeRatio <- rbind(egressTimeRatio, c(stn, general_mean, old_ratio, disabled_ratio,teenager_ratio,child_ratio))
+  }
+  names(egressTimeRatio) <- c("tgout_stn","일반 평균","경로/일반","장애/일반","청소년/일반","어린이/일반")
+  
+  egressTimeRatio
+```
+## 4.4. 성신여대입구역 실제 역 구조
+![Reference Passenger](./pictures/LineWS_역정보/4711_성신여대입구역.jpg)
+
+
+# 5. 결론
+
+* 카드 데이터와 열차운행실적 데이터의 결합을 통해 승강장 내 이동시간을 알 수 있음
+  * 데이터 상 일반 승객에 비해 교통약자의 통행 시간이 더 크게 나타남
+  * 역 구조가 단순하고 작은 우이신설선에서는 승객 유형별 차이가 크지 않음
+  * 9호선과 같이 좀 더 큰 호선에 적용함으로써 역별 차이를 비교해볼 수 있음
+  
+* 각 역에서 승객 유형별 이동시간에 영향을 미치는 요인 분석 필요
 
 
 
